@@ -7,13 +7,9 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "jtag_tap_controller.h"
 #include "q_defs.h"
 #include "sock_debug.h"
-
-/**
- * nc -lkuU /var/tmp/jtag-dummy.sock
- *
- */
 
 #define SOCK_PATH "/var/tmp/jtag-dummy.sock"
 
@@ -28,6 +24,19 @@ static void __attribute__((constructor)) ctor() {
 }
 
 //==============================================================================
+
+struct jtag_tap_state _jtag_tap_state = {.cur_state =
+                                             TAP_STATE_TEST_LOGIC_RESET};
+
+//==============================================================================
+
+struct server_ops_t server_ops;
+void *server_ops_data;
+uint8_t tdo_data[8192] = {0};
+uint8_t tms_data[8192] = {0};
+uint8_t tdi_data[8192] = {0};
+uint32_t tdo_data_count = 0;
+uint32_t tdi_data_count = 0;
 
 char find_devs(uint32_t dev_index, char *out_desc, uint32_t api_ver) {
   debug_write(&_debug_data, "find_devs(dev_index = %d, api_ver = %d)\n",
@@ -70,6 +79,9 @@ int64_t init_dev(void **arg1, const char *desc,
     return 1;
   }
 
+  memcpy(&server_ops, s_server_ops, sizeof(struct server_ops_t));
+  server_ops_data = parent;
+
   debug_write(&_debug_data, "  return 0\n");
   return 1;
 }
@@ -78,13 +90,48 @@ void do_close(void *unused_void) { debug_write(&_debug_data, "do_close()\n"); }
 
 int64_t do_flush(void *unused_void, int bool_val, uint32_t index_val) {
   debug_write(&_debug_data, "do_flush()\n");
+
+  for (unsigned int i = 0; i < tdi_data_count; i++) {
+    uint32_t byte_sel = i / 8;
+    uint32_t bit_sel = i % 8;
+
+    int tms = (tms_data[byte_sel] >> bit_sel) & 1;
+    int tdi = (tdi_data[byte_sel] >> bit_sel) & 1;
+    int tdo;
+
+    jtag_tap_controller(&_jtag_tap_state, tms, tdi, &tdo);
+    tdo_data[byte_sel] |= (tdo << bit_sel);
+    tdo_data_count++;
+  }
+
+  server_ops.p_op_store_tdo(server_ops_data, (uint32_t *)tdo_data,
+                            tdo_data_count);
+
+  tdi_data_count = 0;
+  tdo_data_count = 0;
+  memset(tdi_data, 0, sizeof(tdo_data));
+  memset(tms_data, 0, sizeof(tms_data));
+  memset(tdo_data, 0, sizeof(tdo_data));
+
+  server_ops.p_op_indicate_flush(server_ops_data);
+
   return 1;
 }
 
-void clock_raw(void *unused_void, uint32_t jtag_tms, uint32_t v,
+void clock_raw(void *unused_void, uint32_t jtag_tms, uint32_t jtag_tdi,
                unsigned long len) {
-  debug_write(&_debug_data, "clock_raw(tms = %d, v = %d, len = %d)\n", jtag_tms,
-              v, len);
+  debug_write(&_debug_data, "clock_raw(tms = %d, tdi = %d, len = %d)\n",
+              jtag_tms, jtag_tdi, len);
+
+  for (unsigned int i = 0; i < len; i++) {
+    uint32_t byte_sel = tdi_data_count / 8;
+    uint32_t bit_sel = tdi_data_count % 8;
+
+    tdi_data[byte_sel] |= (jtag_tdi << bit_sel);
+    tms_data[byte_sel] |= (jtag_tms << bit_sel);
+
+    tdi_data_count += 1;
+  }
 }
 
 int64_t clock_multiple(void *unused_void, unsigned jtag_tms,
