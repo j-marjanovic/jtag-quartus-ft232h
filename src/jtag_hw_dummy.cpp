@@ -7,7 +7,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#include "jtag_tap_controller.h"
+#include "jtag_tap_controller.hpp"
 #include "q_defs.h"
 #include "sock_debug.h"
 
@@ -25,8 +25,7 @@ static void __attribute__((constructor)) ctor() {
 
 //==============================================================================
 
-struct jtag_tap_state _jtag_tap_state = {.cur_state =
-                                             TAP_STATE_TEST_LOGIC_RESET};
+struct jtag_tap_state _jtag_tap_state = {TAP_STATE_TEST_LOGIC_RESET};
 
 //==============================================================================
 
@@ -160,22 +159,25 @@ int64_t direct_control(void *arg1, int32_t arg2, int32_t *arg3) {
 //==============================================================================
 
 struct virtual_fns_st fns = {
-    .st_size = sizeof(struct virtual_fns_st),
-    .dev_description = "Dummy JTAG device",
-    .st_flags = 0x800,
-    .p_find_devs = find_devs,
-    .p_find_descriptions = find_descriptions,
-    .p_init_dev = init_dev,
-    .p_close = do_close,
-    .p_set_param = set_param,
-    .p_get_param = get_param,
-    .p_direct_control = direct_control,
-    .p_clock_raw = clock_raw,
-    .p_clock_multiple = clock_multiple,
-    .p_do_flush = do_flush,
+    sizeof(struct virtual_fns_st),
+    "Dummy JTAG device",
+    0x800,
+    nullptr,
+    nullptr,
+    find_devs,
+    find_descriptions,
+    init_dev,
+    do_close,
+    set_param,
+    get_param,
+    direct_control,
+    clock_raw,
+    clock_multiple,
+    nullptr,
+    do_flush,
 };
 
-__attribute__((visibility("default"))) extern struct virtual_fns_st *
+extern "C" { __attribute__((visibility("default"))) extern struct virtual_fns_st *
 get_supported_hardware(uint32_t hw_type) {
   debug_write(&_debug_data, "get_supported_hardware(hw_type = 0x%x)\n",
               hw_type);
@@ -185,4 +187,5 @@ get_supported_hardware(uint32_t hw_type) {
   }
 
   return &fns;
+}
 }
