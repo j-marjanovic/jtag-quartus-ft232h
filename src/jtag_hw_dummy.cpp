@@ -111,6 +111,7 @@ int64_t do_flush(void *unused_void, int bool_val, uint32_t index_val) {
 
 void clock_raw(void *unused_void, uint32_t jtag_tms, uint32_t jtag_tdi,
                unsigned long len) {
+
   sock_debug.debug_write("clock_raw(tms = %d, tdi = %d, len = %d)\n", jtag_tms,
                          jtag_tdi, len);
 
@@ -128,8 +129,6 @@ void clock_raw(void *unused_void, uint32_t jtag_tms, uint32_t jtag_tdi,
 int64_t clock_multiple(void *unused_void, unsigned jtag_tms,
                        unsigned long *p_bits, unsigned long len,
                        unsigned long field_144_minus_len) {
-  sock_debug.debug_write("clock_multiple()\n");
-  sock_debug.debug_write("!!! not yet implemented !!!\n");
   sock_debug.debug_write(
       "clock_multiple(tmp = %d, bits = %p, len = %d, ? = %d)\n", jtag_tms,
       p_bits, len, field_144_minus_len);

@@ -1,4 +1,8 @@
 
+## Useful links
+
+  * https://forums.intel.com/s/question/0D50P00003yyL2bSAE/bemicro-and-programming-under-linux
+
 ## Dummy device
 
 To install the library:
