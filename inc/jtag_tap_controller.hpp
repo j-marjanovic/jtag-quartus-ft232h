@@ -32,7 +32,7 @@ public:
 
     TapState nxt_state = jtag_tap_next_state.at(_cur_state)[tms];
 
-    int tdo_tmp = 0;
+    int tdo_tmp = 1;
     switch (_cur_state) {
     case TapState::TEST_LOGIC_RESET:
       _cur_instr = TapInstr::IDCODE;
@@ -42,7 +42,7 @@ public:
                              instr_to_str(_cur_instr));
       switch (_cur_instr) {
       case TapInstr::IDCODE:
-        _dr.load(0x029310DD);
+        _dr.load(0x029070DD);
         break;
       case TapInstr::BYPASS:
         _bypassr.load(1);
@@ -64,7 +64,7 @@ public:
       }
       break;
     case TapState::CAPTURE_IR:
-      _ir.load(0b01);
+      _ir.load(0b0101010101);
       break;
     case TapState::SHIFT_IR:
       tdo_tmp = _ir.shift(tdi);

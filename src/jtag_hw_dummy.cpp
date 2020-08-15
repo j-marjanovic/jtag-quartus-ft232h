@@ -152,10 +152,12 @@ int64_t clock_multiple(void *unused_void, unsigned jtag_tms,
 
   uint8_t *in_ptr = (uint8_t *)(p_bits);
   for (unsigned int i = 0; i < len; i++) {
+    uint32_t in_byte_sel = i / 8;
+    uint32_t in_bit_sel = i % 8;
     uint32_t byte_sel = tdi_data_count / 8;
     uint32_t bit_sel = tdi_data_count % 8;
 
-    uint8_t in_bit = (in_ptr[byte_sel] >> bit_sel) & 0x1;
+    uint8_t in_bit = (in_ptr[in_byte_sel] >> in_bit_sel) & 0x1;
 
     tdi_data[byte_sel] |= (in_bit << bit_sel);
     tms_data[byte_sel] |= (jtag_tms << bit_sel);
