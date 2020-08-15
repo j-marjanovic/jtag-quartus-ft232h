@@ -21,6 +21,22 @@ JtagTapController jtag_controller{};
 
 //==============================================================================
 
+//#define DEBUG
+
+#ifdef DEBUG
+#define LIBDEBUG(...) sock_debug.debug_write("[lib] " __VA_ARGS__)
+#define hexdump(addr, len) sock_debug.mini_hexdump(addr, len)
+#else
+#define LIBDEBUG(...)                                                          \
+  do {                                                                         \
+  } while (0)
+#define LIBDEBUG_HEXDUMP(...)                                                  \
+  do {                                                                         \
+  } while (0)
+#endif
+
+//==============================================================================
+
 struct server_ops_t server_ops;
 void *server_ops_data;
 uint8_t tdo_data[8192] = {0};
@@ -30,57 +46,55 @@ uint32_t tdo_data_count = 0;
 uint32_t tdi_data_count = 0;
 
 char find_devs(uint32_t dev_index, char *out_desc, uint32_t api_ver) {
-  sock_debug.debug_write("find_devs(dev_index = %d, api_ver = %d)\n", dev_index,
-                         api_ver);
+  LIBDEBUG("find_devs(dev_index = %d, api_ver = %d)\n", dev_index, api_ver);
 
   if (api_ver < 4) {
-    sock_debug.debug_write("  return 0\n");
+    LIBDEBUG("  return 0\n");
     return 0;
   }
 
   if (dev_index >= 1) {
-    sock_debug.debug_write("  return 0\n");
+    LIBDEBUG("  return 0\n");
     return 0;
   }
 
   strcpy(out_desc, "bus-instance");
 
-  sock_debug.debug_write("  return 1\n");
+  LIBDEBUG("  return 1\n");
   return 1;
 }
 
 char find_descriptions(const char *description) {
-  sock_debug.debug_write("find_descriptions()\n");
+  LIBDEBUG("find_descriptions()\n");
   return !strcmp(description, "bus-instance");
 }
 
 int64_t init_dev(void **arg1, const char *desc,
                  struct server_ops_t *s_server_ops, void *parent) {
-  sock_debug.debug_write(
-      "init_dev(desc = %s, s_server_ops = %p, parent = %p)\n", desc,
-      s_server_ops, parent);
+  LIBDEBUG("init_dev(desc = %s, s_server_ops = %p, parent = %p)\n", desc,
+           s_server_ops, parent);
 
   if (!parent) {
-    sock_debug.debug_write("  return 1\n");
+    LIBDEBUG("  return 1\n");
     return 1;
   }
 
   if (strcmp(desc, "bus-instance") != 0) {
-    sock_debug.debug_write("  return 1\n");
+    LIBDEBUG("  return 1\n");
     return 1;
   }
 
   memcpy(&server_ops, s_server_ops, sizeof(struct server_ops_t));
   server_ops_data = parent;
 
-  sock_debug.debug_write("  return 0\n");
+  LIBDEBUG("  return 0\n");
   return 1;
 }
 
-void do_close(void *unused_void) { sock_debug.debug_write("do_close()\n"); }
+void do_close(void *unused_void) { LIBDEBUG("do_close()\n"); }
 
 int64_t do_flush(void *unused_void, int bool_val, uint32_t index_val) {
-  sock_debug.debug_write("do_flush()\n");
+  LIBDEBUG("do_flush()\n");
 
   for (unsigned int i = 0; i < tdi_data_count; i++) {
     uint32_t byte_sel = i / 8;
@@ -94,6 +108,9 @@ int64_t do_flush(void *unused_void, int bool_val, uint32_t index_val) {
     tdo_data[byte_sel] |= (tdo << bit_sel);
     tdo_data_count++;
   }
+
+  LIBDEBUG("  tdo_data_count = %d\n", tdo_data_count);
+  LIBDEBUG_HEXDUMP(tdo_data, (tdo_data_count + 7) / 8);
 
   server_ops.p_op_store_tdo(server_ops_data, (uint32_t *)tdo_data,
                             tdo_data_count);
@@ -112,8 +129,8 @@ int64_t do_flush(void *unused_void, int bool_val, uint32_t index_val) {
 void clock_raw(void *unused_void, uint32_t jtag_tms, uint32_t jtag_tdi,
                unsigned long len) {
 
-  sock_debug.debug_write("clock_raw(tms = %d, tdi = %d, len = %d)\n", jtag_tms,
-                         jtag_tdi, len);
+  LIBDEBUG("clock_raw(tms = %d, tdi = %d, len = %d)\n", jtag_tms, jtag_tdi,
+           len);
 
   for (unsigned int i = 0; i < len; i++) {
     uint32_t byte_sel = tdi_data_count / 8;
@@ -129,10 +146,9 @@ void clock_raw(void *unused_void, uint32_t jtag_tms, uint32_t jtag_tdi,
 int64_t clock_multiple(void *unused_void, unsigned jtag_tms,
                        unsigned long *p_bits, unsigned long len,
                        unsigned long field_144_minus_len) {
-  sock_debug.debug_write(
-      "clock_multiple(tmp = %d, bits = %p, len = %d, ? = %d)\n", jtag_tms,
-      p_bits, len, field_144_minus_len);
-  sock_debug.mini_hexdump(p_bits, (len + 7) / 8 + 1);
+  LIBDEBUG("clock_multiple(tmp = %d, bits = %p, len = %d, ? = %d)\n", jtag_tms,
+           p_bits, len, field_144_minus_len);
+  LIBDEBUG_HEXDUMP(p_bits, (len + 7) / 8 + 1);
 
   uint8_t *in_ptr = (uint8_t *)(p_bits);
   for (unsigned int i = 0; i < len; i++) {
@@ -150,17 +166,17 @@ int64_t clock_multiple(void *unused_void, unsigned jtag_tms,
 }
 
 uint64_t set_param(void *arg1, char *arg2, uint32_t arg3) {
-  sock_debug.debug_write("set_param(param = %s)\n", arg2);
+  LIBDEBUG("set_param(param = %s)\n", arg2);
   return 0;
 }
 
 int64_t get_param(void *arg1, char *arg2, uint32_t *arg3) {
-  sock_debug.debug_write("get_param(param = %s)\n", arg2);
+  LIBDEBUG("get_param(param = %s)\n", arg2);
   return 0;
 }
 
 int64_t direct_control(void *arg1, int32_t arg2, int32_t *arg3) {
-  sock_debug.debug_write("direct_control(arg2 = %d)\n", arg2);
+  LIBDEBUG("direct_control(arg2 = %d)\n", arg2);
   return 0;
 }
 
@@ -187,7 +203,7 @@ struct virtual_fns_st fns = {sizeof(struct virtual_fns_st),
 extern "C" {
 __attribute__((visibility("default"))) struct virtual_fns_st *
 get_supported_hardware(uint32_t hw_type) {
-  sock_debug.debug_write("get_supported_hardware(hw_type = 0x%x)\n", hw_type);
+  LIBDEBUG("get_supported_hardware(hw_type = 0x%x)\n", hw_type);
 
   if (hw_type != 0) {
     return 0;
