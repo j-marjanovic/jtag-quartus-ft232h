@@ -169,10 +169,14 @@ private:
       return TapInstr::EXTEST_TRAIN;
     }
 
+    // not documented in Stratix V Device Handbook, but still used:
+    //   0b00'0000'1110: USER1
+    //   0b10'1000'0001: FACTORY
+
     sock_debug.debug_write("UNKNOWN INSTRUCTION (%x), ", val);
     // throw std::invalid_argument("could not cast to TapInstr");
 
-    return TapInstr::SAMPLE_PRELOAD; // just to make the compiler happy
+    return TapInstr::BYPASS; // just to make the compiler happy
   }
 
   const char *instr_to_str(TapInstr val) {
