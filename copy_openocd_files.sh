@@ -29,6 +29,7 @@ desired_files=(
     "src/jtag/interface.h"
     "src/jtag/interface.c"
     "src/jtag/jtag.h"
+    "src/jtag/minidriver.h"
 )
 
 for desired_file in "${desired_files[@]}"; do
@@ -37,3 +38,4 @@ for desired_file in "${desired_files[@]}"; do
     cp ${OPENOCD_FOLDER}/${desired_file} openocd/$(dirname $desired_file)
 done
 
+touch openocd/src/jtag/minidriver_imp.h
