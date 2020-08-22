@@ -1,4 +1,4 @@
-# JTAG library for FT232H on OpenTray Mezzanine Adapter
+# JTAG library for FT232H on OCS Tray Mezzanine Adapter
 
 ## Current state
 
