@@ -23,7 +23,23 @@
 #include "config.h"
 #endif
 
-#include "log.h"
+// #include "log.h"
+#include <assert.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+
+#define ERROR_OK                                                (0)
+#define ERROR_NO_CONFIG_FILE                    (-2)
+#define ERROR_BUF_TOO_SMALL                             (-3)
+/* see "Error:" log entry for meaningful message to the user. The caller shou
+ld
+ * make no assumptions about what went wrong and try to handle the problem.
+ */
+#define ERROR_FAIL                                              (-4)
+#define ERROR_WAIT                                              (-5)
+
+
 #include "binarybuffer.h"
 
 static const unsigned char bit_reverse_table256[] = {

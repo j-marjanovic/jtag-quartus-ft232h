@@ -20,9 +20,32 @@
 #include "config.h"
 #endif
 
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "mpsse.h"
-#include "helper/log.h"
+// #include "helper/log.h"
 #include <libusb.h>
+
+
+#define LOG_ERROR(...)
+#define LOG_WARNING(...)
+#define LOG_DEBUG(...)
+
+#define ERROR_OK                                                (0)
+#define ERROR_NO_CONFIG_FILE                    (-2)
+#define ERROR_BUF_TOO_SMALL                             (-3)
+/* see "Error:" log entry for meaningful message to the user. The caller shou
+ld
+ * make no assumptions about what went wrong and try to handle the problem.
+ */
+#define ERROR_FAIL                                              (-4)
+#define ERROR_WAIT                                              (-5)
+
+void keep_alive() {
+	// do nothing
+}
 
 /* Compatibility define for older libusb-1.0 */
 #ifndef LIBUSB_CALL

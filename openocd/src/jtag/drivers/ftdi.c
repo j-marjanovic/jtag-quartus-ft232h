@@ -64,15 +64,38 @@
  * which can affect longer JTAG state paths.
  */
 
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
 /* project specific includes */
-#include <jtag/interface.h>
-#include <jtag/swd.h>
-#include <transport/transport.h>
-#include <helper/time_support.h>
+// #include <jtag/interface.h>
+// #include <jtag/swd.h>
+// #include <transport/transport.h>
+// #include <helper/time_support.h>
+
+#include "jtag/jtag.h"
+
+#define LOG_ERROR(...)
+#define LOG_WARNING(...)
+#define LOG_DEBUG(...)
+#define LOG_INFO(...)
+
+#define ERROR_OK                                                (0)
+#define ERROR_NO_CONFIG_FILE                    (-2)
+#define ERROR_BUF_TOO_SMALL                             (-3)
+/* see "Error:" log entry for meaningful message to the user. The caller shou
+ld
+ * make no assumptions about what went wrong and try to handle the problem.
+ */
+#define ERROR_FAIL                                              (-4)
+#define ERROR_WAIT                                              (-5)
+#define ERROR_JTAG_INIT_FAILED	ERROR_FAIL
+
 
 #if IS_CYGWIN == 1
 #include <windows.h>
@@ -131,7 +154,9 @@ static uint16_t direction;
 static uint16_t jtag_output_init;
 static uint16_t jtag_direction_init;
 
+#if 0
 static int ftdi_swd_switch_seq(enum swd_special_seq seq);
+#endif
 
 static struct signal *find_signal_by_name(const char *name)
 {
@@ -248,6 +273,7 @@ static int ftdi_get_signal(const struct signal *s, uint16_t * value_out)
  *
  * @param goal_state is the destination state for the move.
  */
+#if 0
 static void move_to_state(tap_state_t goal_state)
 {
 	tap_state_t start_state = tap_get_state();
@@ -275,6 +301,8 @@ static void move_to_state(tap_state_t goal_state)
 		false,
 		ftdi_jtag_mode);
 }
+
+#endif
 
 static int ftdi_speed(int speed)
 {
@@ -308,6 +336,7 @@ static int ftdi_khz(int khz, int *jtag_speed)
 	*jtag_speed = khz * 1000;
 	return ERROR_OK;
 }
+#if 0
 
 static void ftdi_end_state(tap_state_t state)
 {
@@ -318,6 +347,7 @@ static void ftdi_end_state(tap_state_t state)
 		exit(-1);
 	}
 }
+
 
 static void ftdi_execute_runtest(struct jtag_command *cmd)
 {
@@ -649,12 +679,20 @@ static int ftdi_execute_queue(void)
 	return retval;
 }
 
+#endif
+
+unsigned jtag_get_speed_khz(void) {
+	return 1000;
+}
+
 static int ftdi_initialize(void)
 {
+	#if 0
 	if (tap_get_tms_path_len(TAP_IRPAUSE, TAP_IRPAUSE) == 7)
 		LOG_DEBUG("ftdi interface using 7 step jtag state transitions");
 	else
 		LOG_DEBUG("ftdi interface using shortest path jtag state transitions");
+	#endif
 
 	for (int i = 0; ftdi_vid[i] || ftdi_pid[i]; i++) {
 		mpsse_ctx = mpsse_open(&ftdi_vid[i], &ftdi_pid[i], ftdi_device_desc,
@@ -698,6 +736,8 @@ static int ftdi_quit(void)
 
 	return ERROR_OK;
 }
+
+#if 0
 
 COMMAND_HANDLER(ftdi_handle_device_desc_command)
 {
@@ -1018,6 +1058,8 @@ static const struct command_registration ftdi_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
+#endif
+
 static int create_default_signal(const char *name, uint16_t data_mask)
 {
 	struct signal *sig = create_signal(name);
@@ -1045,6 +1087,8 @@ static int create_signals(void)
 		return ERROR_FAIL;
 	return ERROR_OK;
 }
+
+#if 0
 
 static int ftdi_swd_init(void)
 {
@@ -1260,3 +1304,5 @@ struct jtag_interface ftdi_interface = {
 	.khz = ftdi_khz,
 	.execute_queue = ftdi_execute_queue,
 };
+
+#endif

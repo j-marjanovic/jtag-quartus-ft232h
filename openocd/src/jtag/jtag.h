@@ -22,8 +22,9 @@
 #ifndef OPENOCD_JTAG_JTAG_H
 #define OPENOCD_JTAG_JTAG_H
 
+#include <jim.h>
 #include <helper/binarybuffer.h>
-#include <helper/log.h>
+// #include <helper/log.h>
 
 #ifdef _DEBUG_JTAG_IO_
 #define DEBUG_JTAG_IO(expr ...) \
