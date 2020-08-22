@@ -1,3 +1,12 @@
+# JTAG library for FT232H on OpenTray Mezzanine Adapter
+
+## Current state
+
+- JTAG scan chain works
+- Programming the FPGA does not work
+- Smaller improvements also pending
+
+![Quartus Programmer](docs/current_state.png)
 
 ## Useful links
 
