@@ -46,9 +46,12 @@ struct mpsse_ctx *ctx = NULL;
 
 struct server_ops_t server_ops;
 void *server_ops_data;
-uint8_t tdo_data[8192] = {0};
-uint8_t tms_data[8192] = {0};
-uint8_t tdi_data[8192] = {0};
+
+// Quartus can request (up to) 100000 bits
+
+uint8_t tdo_data[32768] = {0};
+uint8_t tms_data[32768] = {0};
+uint8_t tdi_data[32768] = {0};
 uint32_t tdo_data_count = 0;
 uint32_t tdi_data_count = 0;
 
@@ -123,7 +126,7 @@ int64_t do_flush(void *unused_void, int bool_val, uint32_t index_val) {
   }
 
   int rc = mpsse_flush(ctx);
-  sock_debug.debug_write("[MPSSE] mpsse_flush = %p\n", rc);
+  sock_debug.debug_write("[MPSSE] mpsse_flush = %d\n", rc);
 
   sock_debug.debug_write("[MPSSE]  tdo_data_count = %d\n", tdo_data_count);
   sock_debug.mini_hexdump(tdo_data, (tdo_data_count + 7) / 8);
@@ -201,7 +204,7 @@ int64_t direct_control(void *arg1, int32_t arg2, int32_t *arg3) {
 //==============================================================================
 
 struct virtual_fns_st fns = {sizeof(struct virtual_fns_st),
-                             "Dummy JTAG device",
+                             "OTMA FT232H",
                              0x800,
                              nullptr,
                              nullptr,

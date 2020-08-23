@@ -4,6 +4,7 @@
 
 - JTAG scan chain works
 - Programming the FPGA does not work
+- Initialization of the MPSSE is not implemented --> run OpenOCD once to init the device
 - Smaller improvements also pending
 
 ![Quartus Programmer](docs/current_state.png)
