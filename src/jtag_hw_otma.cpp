@@ -1,12 +1,12 @@
 
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include <assert.h>
 
 #include "jtag_tap_controller.hpp"
 #include "q_defs.h"
@@ -28,7 +28,7 @@ struct mpsse_ctx *ctx = NULL;
 
 //==============================================================================
 
-// #define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #define LIBDEBUG(...) sock_debug.debug_write("[lib] " __VA_ARGS__)
@@ -47,14 +47,13 @@ struct mpsse_ctx *ctx = NULL;
 struct server_ops_t server_ops;
 void *server_ops_data;
 
-// Quartus can request (up to) 100000 bits
+#define DATA_SIZE_BYTES (32 * 1024 * 1024)
 
-uint8_t tdo_data[32768] = {0};
-uint8_t tms_data[32768] = {0};
-uint8_t tdi_data[32768] = {0};
+uint8_t *tdo_data = NULL;
+uint8_t *tms_data = NULL;
+uint8_t *tdi_data = NULL;
 uint32_t tdo_data_count = 0;
 uint32_t tdi_data_count = 0;
-
 
 char find_devs(uint32_t dev_index, char *out_desc, uint32_t api_ver) {
   LIBDEBUG("find_devs(dev_index = %d, api_ver = %d)\n", dev_index, api_ver);
@@ -121,6 +120,8 @@ int64_t do_flush(void *unused_void, int bool_val, uint32_t index_val) {
     // uint8_t tms = (tms_data[byte_sel] >> bit_sel) & 1;
     uint8_t tdi = (tdi_data[byte_sel] >> bit_sel) & 1;
 
+    int tms_bit = (tms_data[byte_sel] >> bit_sel) & 1;
+    int tdo_bit;
     mpsse_clock_tms_cs(ctx, tms_data, i, tdo_data, i, 1, tdi, JTAG_MODE);
     tdo_data_count++;
   }
@@ -129,16 +130,16 @@ int64_t do_flush(void *unused_void, int bool_val, uint32_t index_val) {
   sock_debug.debug_write("[MPSSE] mpsse_flush = %d\n", rc);
 
   sock_debug.debug_write("[MPSSE]  tdo_data_count = %d\n", tdo_data_count);
-  sock_debug.mini_hexdump(tdo_data, (tdo_data_count + 7) / 8);
+  // sock_debug.mini_hexdump(tdo_data, (tdo_data_count + 7) / 8);
 
   server_ops.p_op_store_tdo(server_ops_data, (uint32_t *)tdo_data,
                             tdo_data_count);
 
   tdi_data_count = 0;
   tdo_data_count = 0;
-  memset(tdi_data, 0, sizeof(tdo_data));
-  memset(tms_data, 0, sizeof(tms_data));
-  memset(tdo_data, 0, sizeof(tdo_data));
+  memset(tdi_data, 0, DATA_SIZE_BYTES);
+  memset(tms_data, 0, DATA_SIZE_BYTES);
+  memset(tdo_data, 0, DATA_SIZE_BYTES);
 
   server_ops.p_op_indicate_flush(server_ops_data);
 
@@ -167,7 +168,7 @@ int64_t clock_multiple(void *unused_void, unsigned jtag_tms,
                        unsigned long field_144_minus_len) {
   LIBDEBUG("clock_multiple(tmp = %d, bits = %p, len = %d, ? = %d)\n", jtag_tms,
            p_bits, len, field_144_minus_len);
-  LIBDEBUG_HEXDUMP(p_bits, (len + 7) / 8 + 1);
+  // LIBDEBUG_HEXDUMP(p_bits, (len + 7) / 8 + 1);
 
   uint8_t *in_ptr = (uint8_t *)(p_bits);
   for (unsigned int i = 0; i < len; i++) {
@@ -229,6 +230,20 @@ get_supported_hardware(uint32_t hw_type) {
   if (hw_type != 0) {
     return 0;
   }
+
+  if (!tdo_data) {
+    tdo_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
+  }
+  if (!tms_data) {
+    tms_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
+  }
+  if (!tdi_data) {
+    tdi_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
+  }
+
+  LIBDEBUG("  tdo_data = %p\n", tdo_data);
+  LIBDEBUG("  tms_data = %p\n", tms_data);
+  LIBDEBUG("  tdi_data = %p\n", tdi_data);
 
   return &fns;
 }
