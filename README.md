@@ -2,12 +2,21 @@
 
 ## Current state
 
-- JTAG scan chain works
-- Programming the FPGA does not work
+- JTAG scan chain and programming of the FPGA works (see the screenshot below)
 - Initialization of the MPSSE is not implemented --> run OpenOCD once to init the device
 - Smaller improvements also pending
 
-![Quartus Programmer](docs/current_state.png)
+To initialize the FT232H, run the following command:
+
+```
+openocd \
+    -f interface/ftdi/um232h.cfg \
+    -c "adapter_khz 2000; transport select jtag; jtag newtap auto0 tap -irlen 10 -expected-id 0x029070dd";
+```
+
+Result after programming the bitstream:
+
+![Quartus Programmer](docs/current_state_2.png)
 
 ## Useful links
 
