@@ -8,6 +8,20 @@
 #include "shift_reg.hpp"
 #include "sock_debug.hpp"
 
+// #define DEBUG
+
+#ifdef DEBUG
+#define DEBUG_PRINT(...) sock_debug.debug_write("[jtag] " __VA_ARGS__)
+#define DEBUG_HEXDUMP(addr, len) sock_debug.mini_hexdump(addr, len)
+#else
+#define DEBUG_PRINT(...)                                                       \
+  do {                                                                         \
+  } while (0)
+#define DEBUG_HEXDUMP(...)                                                     \
+  do {                                                                         \
+  } while (0)
+#endif
+
 extern SockDebug sock_debug;
 
 class JtagTapController {
@@ -20,15 +34,17 @@ class JtagTapController {
   ShiftReg<10> _ir;
   ShiftReg<32> _dr;
   ShiftReg<1> _bypassr;
+  unsigned int _bit_cntr;
 
 public:
   explicit JtagTapController()
-      : _cur_state{TapState::TEST_LOGIC_RESET}, _cur_instr{TapInstr::IDCODE} {};
+      : _cur_state{TapState::TEST_LOGIC_RESET},
+        _cur_instr{TapInstr::IDCODE}, _bit_cntr{0} {};
 
   /** advance TAP controller by one clock cycle */
   void step(int tms, int tdi, int *tdo) {
-    sock_debug.debug_write("    cur_state = %s, tdi = %d, tms = %d, ",
-                           jtag_to_str(_cur_state), tdi, tms);
+    DEBUG_PRINT("    cur_state = %s, tdi = %d, tms = %d, ",
+                jtag_to_str(_cur_state), tdi, tms);
 
     TapState nxt_state = jtag_tap_next_state.at(_cur_state)[tms];
 
@@ -38,8 +54,7 @@ public:
       _cur_instr = TapInstr::IDCODE;
       break;
     case TapState::CAPTURE_DR:
-      sock_debug.debug_write("  CAPTURE_DR (instr = %s), ",
-                             instr_to_str(_cur_instr));
+      DEBUG_PRINT("  CAPTURE_DR (instr = %s), ", instr_to_str(_cur_instr));
       switch (_cur_instr) {
       case TapInstr::IDCODE:
         _dr.load(0x029070DD);
@@ -59,6 +74,19 @@ public:
       case TapInstr::BYPASS:
         tdo_tmp = _bypassr.shift(tdi);
         break;
+      case TapInstr::UNKNOWN1:
+        _bit_cntr++;
+        if ((_bit_cntr % 1'000'000 == 0) || (_bit_cntr >= 213'798'880)) {
+          sock_debug.debug_write("[jtag] received %d bits\n", _bit_cntr);
+        }
+        break;
+      case TapInstr::UNKNOWN2:
+        // This instructions looks like reading from a status register.
+        // Return all 1s to satisfy the condition to have CONF_DONE high
+        // at the end of the programming procedure.
+        sock_debug.debug_write("[jtag] TapInstr::UNKNOWN2\n");
+        tdo_tmp = 1;
+        break;
       default:
         break;
       }
@@ -68,7 +96,7 @@ public:
       break;
     case TapState::SHIFT_IR:
       tdo_tmp = _ir.shift(tdi);
-      sock_debug.debug_write("SHIFT_IR = %x, ", _ir.val());
+      DEBUG_PRINT("SHIFT_IR = %x, ", _ir.val());
       break;
     case TapState::EXIT1_IR:
       // do nothing
@@ -80,20 +108,22 @@ public:
       // do nothing
       break;
     case TapState::UPDATE_IR:
-      sock_debug.debug_write("UPDATE_IR = %x, ", _ir.val());
+      DEBUG_PRINT("UPDATE_IR = %x, ", _ir.val());
       _cur_instr = instr_from_bits(_ir.val());
+      sock_debug.debug_write("[jtag] UPDATE_IR = %x (%s)\n", _ir.val(),
+                             instr_to_str(_cur_instr));
       break;
     default:
       tdo_tmp = 1;
       break;
     }
 
-    sock_debug.debug_write("tdo = %d", tdo_tmp);
+    DEBUG_PRINT("tdo = %d", tdo_tmp);
     if (tdo) {
       *tdo = tdo_tmp;
     }
 
-    sock_debug.debug_write("\n");
+    DEBUG_PRINT("\n");
     _cur_state = nxt_state;
   }
 
@@ -133,6 +163,8 @@ private:
     KEY_VERIFY,
     EXTEST_PULSE,
     EXTEST_TRAIN,
+    UNKNOWN1,
+    UNKNOWN2
   };
 
   TapInstr instr_from_bits(int val) {
@@ -167,14 +199,20 @@ private:
       return TapInstr::EXTEST_PULSE;
     case 0b00'0100'1111:
       return TapInstr::EXTEST_TRAIN;
+    case 0b00'0000'0010:
+      return TapInstr::UNKNOWN1;
+    case 0b00'0000'0100:
+      return TapInstr::UNKNOWN2;
     }
 
     // not documented in Stratix V Device Handbook, but still used:
     //   0b00'0000'1110: USER1
     //   0b10'1000'0001: FACTORY
+    //   0b00'0000'0010: download config bits
+    //   0b00'0000'0100: last instr after programming
 
     sock_debug.debug_write("UNKNOWN INSTRUCTION (%x), ", val);
-    // throw std::invalid_argument("could not cast to TapInstr");
+    DEBUG_PRINT("UNKNOWN INSTRUCTION (%x), ", val);
 
     return TapInstr::BYPASS; // just to make the compiler happy
   }
@@ -211,6 +249,10 @@ private:
       return "EXTEST_PULSE";
     case TapInstr::EXTEST_TRAIN:
       return "EXTEST_TRAIN";
+    case TapInstr::UNKNOWN1:
+      return "UNKNOWN1";
+    case TapInstr::UNKNOWN2:
+      return "UNKNOWN2";
     }
 
     // this should never be reached

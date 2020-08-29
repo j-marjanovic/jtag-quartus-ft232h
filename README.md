@@ -12,6 +12,7 @@
 ## Useful links
 
   * https://forums.intel.com/s/question/0D50P00003yyL2bSAE/bemicro-and-programming-under-linux
+  * https://community.intel.com/t5/Programmable-Devices/MAX10-JTAG-Instruction-Set-Understanding-what-USBBlaster-is/td-p/218784
 
 ## Dummy device
 

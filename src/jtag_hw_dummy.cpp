@@ -21,11 +21,11 @@ JtagTapController jtag_controller{};
 
 //==============================================================================
 
-//#define DEBUG
+// #define DEBUG
 
 #ifdef DEBUG
 #define LIBDEBUG(...) sock_debug.debug_write("[lib] " __VA_ARGS__)
-#define hexdump(addr, len) sock_debug.mini_hexdump(addr, len)
+#define LIBDEBUG_HEXDUMP(addr, len) sock_debug.mini_hexdump(addr, len)
 #else
 #define LIBDEBUG(...)                                                          \
   do {                                                                         \
@@ -39,9 +39,12 @@ JtagTapController jtag_controller{};
 
 struct server_ops_t server_ops;
 void *server_ops_data;
-uint8_t tdo_data[8192] = {0};
-uint8_t tms_data[8192] = {0};
-uint8_t tdi_data[8192] = {0};
+
+#define DATA_SIZE_BYTES (32 * 1024 * 1024)
+
+uint8_t *tdo_data = NULL;
+uint8_t *tms_data = NULL;
+uint8_t *tdi_data = NULL;
 uint32_t tdo_data_count = 0;
 uint32_t tdi_data_count = 0;
 
@@ -117,9 +120,9 @@ int64_t do_flush(void *unused_void, int bool_val, uint32_t index_val) {
 
   tdi_data_count = 0;
   tdo_data_count = 0;
-  memset(tdi_data, 0, sizeof(tdo_data));
-  memset(tms_data, 0, sizeof(tms_data));
-  memset(tdo_data, 0, sizeof(tdo_data));
+  memset(tdi_data, 0, DATA_SIZE_BYTES);
+  memset(tms_data, 0, DATA_SIZE_BYTES);
+  memset(tdo_data, 0, DATA_SIZE_BYTES);
 
   server_ops.p_op_indicate_flush(server_ops_data);
 
@@ -206,6 +209,20 @@ extern "C" {
 __attribute__((visibility("default"))) struct virtual_fns_st *
 get_supported_hardware(uint32_t hw_type) {
   LIBDEBUG("get_supported_hardware(hw_type = 0x%x)\n", hw_type);
+
+  if (!tdo_data) {
+    tdo_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
+  }
+  if (!tms_data) {
+    tms_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
+  }
+  if (!tdi_data) {
+    tdi_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
+  }
+
+  LIBDEBUG("  tdo_data = %p\n", tdo_data);
+  LIBDEBUG("  tms_data = %p\n", tms_data);
+  LIBDEBUG("  tdi_data = %p\n", tdi_data);
 
   if (hw_type != 0) {
     return 0;
