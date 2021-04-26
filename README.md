@@ -1,4 +1,39 @@
-# JTAG library for FT232H on OCS Tray Mezzanine Adapter
+# JTAG library for FT232H on Pikes Peak / Storey Peak FPGA Boards
+
+This driver allows using the on-board FT232 chip as a JTAG interface in Quartus for the Pikes Peak and Storey Peak FPGA accelerator boards.
+
+## Installation
+
+Install pre-reqs:
+
+```sh
+# On Debian/Ubuntu hosts
+sudo apt-get install libtool pkg-config texinfo libusb-dev libusb-1.0.0-dev libftdi-dev autoconf libjim-dev git wget build-essential cmake
+```
+
+Build:
+
+```sh
+git clone https://github.com/j-marjanovic/jtag-quartus-ft232h
+cd jtag-quartus-ft232h
+mkdir build && cd build
+cmake ..
+make -j`nproc`
+```
+
+To install, copy `libjtag_hw_otma.so` to your quartus `linux64` directory (eg. `$HOME/altera/15.0/quartus/linux64`).
+
+## Initialization
+
+Before using this driver, run OpenOCD to initialize the FT232H:
+
+```sh
+openocd \
+    -f interface/ftdi/um232h.cfg \
+    -c "adapter_khz 2000; transport select jtag; jtag newtap auto0 tap -irlen 10 -expected-id 0x029070dd";
+```
+
+OpenOCD prebuilt binaries can be downloaded from <https://github.com/xpack-dev-tools/openocd-xpack/releases>.
 
 ## Current state
 
@@ -19,15 +54,6 @@ speeds for 5SGSMD5 with the bitstream size of 213,798,880 bits (cca 26 MB).
 | 10               | 02:03                 |
 | 20               | 01:54                 |
 
-### Initialization
-
-To initialize the FT232H, run the following command:
-
-```
-openocd \
-    -f interface/ftdi/um232h.cfg \
-    -c "adapter_khz 2000; transport select jtag; jtag newtap auto0 tap -irlen 10 -expected-id 0x029070dd";
-```
 
 ### Usage example
 
@@ -44,12 +70,12 @@ Result after programming the bitstream:
 
 To install the library:
 
-```
+```sh
 sudo ln -sf $(readlink -f libjtag_hw_dummy.so) /opt/intelFPGA/19.1/quartus/linux64/
 ```
 
 To listen do the debug log:
 
-```
+```sh
 nc -lkuU /var/tmp/jtag-dummy.sock
 ```
