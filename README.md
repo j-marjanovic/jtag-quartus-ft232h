@@ -8,7 +8,7 @@ Install pre-reqs:
 
 ```sh
 # On Debian/Ubuntu hosts
-sudo apt-get install libtool pkg-config texinfo libusb-dev libusb-1.0.0-dev libftdi-dev autoconf libjim-dev git wget build-essential cmake
+sudo apt-get install -y libtool pkg-config texinfo libusb-dev libusb-1.0.0-dev libftdi-dev autoconf libjim-dev git wget build-essential cmake
 ```
 
 Build:
@@ -22,6 +22,16 @@ make -j`nproc`
 ```
 
 To install, copy `libjtag_hw_otma.so` to your quartus `linux64` directory (eg. `$HOME/altera/15.0/quartus/linux64`).
+
+To avoid permission errors, create an UDev rule allowing permission to the `plugdev` group and add your user to this group.
+
+```sh
+cat << EOF | sudo tee /etc/udev/rules.d/100-usb-ftdi.rules
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", OWNER="root", GROUP="plugdev", TAG+="uaccess"
+EOF
+```
+
+Add your user to `plugdev` group with `sudo adduser $USER plugdev`
 
 ## Initialization
 
