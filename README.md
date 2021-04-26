@@ -40,8 +40,11 @@ Before using this driver, run OpenOCD to initialize the FT232H:
 ```sh
 openocd \
     -f interface/ftdi/um232h.cfg \
-    -c "adapter_khz 2000; transport select jtag; jtag newtap auto0 tap -irlen 10 -expected-id 0x029070dd";
+    -c "adapter_khz 2000; transport select jtag; jtag newtap auto0 tap -irlen 10 -expected-id 0x029070dd; init; exit;"
 ```
+
+To initialize the interface at different clock speeds, change the `adapter_khz` parameter.
+
 
 OpenOCD prebuilt binaries can be downloaded from <https://github.com/xpack-dev-tools/openocd-xpack/releases>.
 
