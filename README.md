@@ -8,7 +8,7 @@ Install pre-reqs:
 
 ```sh
 # On Debian/Ubuntu hosts
-sudo apt-get install libtool pkg-config texinfo libusb-dev libusb-1.0.0-dev libftdi-dev autoconf libjim-dev git wget build-essential cmake
+sudo apt-get install -y libtool pkg-config texinfo libusb-dev libusb-1.0.0-dev libftdi-dev autoconf libjim-dev git wget build-essential cmake
 ```
 
 Build:
@@ -23,6 +23,16 @@ make -j`nproc`
 
 To install, copy `libjtag_hw_otma.so` to your quartus `linux64` directory (eg. `$HOME/altera/15.0/quartus/linux64`).
 
+To avoid permission errors, create an UDev rule allowing permission to the `plugdev` group and add your user to this group.
+
+```sh
+cat << EOF | sudo tee /etc/udev/rules.d/100-usb-ftdi.rules
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", OWNER="root", GROUP="plugdev", TAG+="uaccess"
+EOF
+```
+
+Add your user to `plugdev` group with `sudo adduser $USER plugdev`
+
 ## Initialization
 
 Before using this driver, run OpenOCD to initialize the FT232H:
@@ -30,8 +40,11 @@ Before using this driver, run OpenOCD to initialize the FT232H:
 ```sh
 openocd \
     -f interface/ftdi/um232h.cfg \
-    -c "adapter_khz 2000; transport select jtag; jtag newtap auto0 tap -irlen 10 -expected-id 0x029070dd";
+    -c "adapter_khz 2000; transport select jtag; jtag newtap auto0 tap -irlen 10 -expected-id 0x029070dd; init; exit;"
 ```
+
+To initialize the interface at different clock speeds, change the `adapter_khz` parameter.
+
 
 OpenOCD prebuilt binaries can be downloaded from <https://github.com/xpack-dev-tools/openocd-xpack/releases>.
 
