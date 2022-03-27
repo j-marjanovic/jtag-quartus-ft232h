@@ -8,7 +8,7 @@ Install pre-reqs:
 
 ```sh
 # On Debian/Ubuntu hosts
-sudo apt-get install -y libtool pkg-config texinfo libusb-dev libusb-1.0.0-dev libftdi-dev autoconf libjim-dev git wget build-essential cmake
+sudo apt-get install -y libtool pkg-config texinfo libusb-dev libusb-1.0.0-dev libftdi-dev autoconf libjim-dev git wget build-essential cmake openocd
 ```
 
 Build:
@@ -40,7 +40,7 @@ Before using this driver, run OpenOCD to initialize the FT232H:
 ```sh
 openocd \
     -f interface/ftdi/um232h.cfg \
-    -c "adapter_khz 2000; transport select jtag; jtag newtap auto0 tap -irlen 10 -expected-id 0x029070dd; init; exit;"
+    -c "adapter speed 2000; transport select jtag; jtag newtap auto0 tap -irlen 10 -expected-id 0x029070dd; init; exit;"
 ```
 
 To initialize the interface at different clock speeds, change the `adapter_khz` parameter.
