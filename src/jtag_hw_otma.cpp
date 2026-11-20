@@ -66,10 +66,10 @@ SockDebug sock_debug{SOCK_DEBUG_PATH};
 // frequency" box in the Programmer's Hardware Settings dialog; Quartus stores
 // it under the PGMWQ_TCK_FREQ key) and arrives here in Hz. The FT232H only
 // needs a divider programmed, so honouring the parameter is a couple of MPSSE
-// commands. Until the Programmer asks for something else we use 2 MHz as a safe
-// default.
+// commands. 30 MHz is the highest the FT232H's MPSSE can generate (60 MHz / 2)
+// and has been verified on the Storey Peak boards.
 
-#define OTMA_DEFAULT_TCK_HZ 2000000u
+#define OTMA_DEFAULT_TCK_HZ 30000000u
 #define OTMA_PARAM_TCK "JtagClock"
 #define OTMA_PARAM_KERNEL_UPDATE "KernelUpdateRequired"
 
@@ -340,24 +340,72 @@ void do_close(void *arg) {
   LIBDEBUG("do_close(%s)\n", dev ? dev->desc : "?");
 }
 
+//==============================================================================
+//
+// Command queueing
+//
+// The ABI hands us a TMS bit stream and a TDI bit stream and lets us clock them
+// out however we like. Emitting one MPSSE command per bit is what makes a 25 MB
+// bitstream take minutes: every bit costs three USB command bytes, and the
+// round trips dominate long before TCK does. Two shortcuts fix that:
+//
+//   * TMS constant for a run of bits: the TAP is parked in Shift-DR/Shift-IR,
+//     which is where virtually all of a bitstream lives. Set TMS once with a
+//     pin command and shift the whole run with the bulk data command.
+//   * Otherwise group bits that share a TDI value, so the TMS/CS command still
+//     covers several bits per USB command byte.
+
+#define OTMA_BULK_MIN 8u
+
+static inline unsigned otma_bit(const uint8_t *buf, unsigned i) {
+  return (buf[i >> 3] >> (i & 7)) & 1u;
+}
+
+static void otma_clock_run(otma_dev *dev, unsigned count) {
+  unsigned i = 0;
+
+  while (i < count) {
+    unsigned tms = otma_bit(dev->tms_data, i);
+    unsigned run = 1;
+    while (i + run < count && otma_bit(dev->tms_data, i + run) == tms) {
+      run++;
+    }
+
+    if (run >= OTMA_BULK_MIN) {
+      // Set TMS without clocking, then shift the run in bulk. The low byte
+      // layout is the one otma_init_mpsse() programs: AD0 TCK, AD1 TDI,
+      // AD2 TDO (input), AD3 TMS, AD4..7 high.
+      mpsse_set_data_bits_low_byte(dev->ctx, (uint8_t)(0xf0u | (tms << 3)), 0xfb);
+      mpsse_clock_data(dev->ctx, dev->tdi_data, i, dev->tdo_data, i, run,
+                       JTAG_MODE);
+      i += run;
+      continue;
+    }
+
+    unsigned end = i + run;
+    while (i < end) {
+      unsigned tdi = otma_bit(dev->tdi_data, i);
+      unsigned n = 1;
+      while (i + n < end && otma_bit(dev->tdi_data, i + n) == tdi) {
+        n++;
+      }
+      mpsse_clock_tms_cs(dev->ctx, dev->tms_data, i, dev->tdo_data, i, n, tdi,
+                         JTAG_MODE);
+      i += n;
+    }
+  }
+}
+
 int64_t do_flush(void *arg, int bool_val, uint32_t index_val) {
   otma_dev *dev = otma_dev_from(arg);
   if (!dev || !dev->ctx) {
     return 0;
   }
 
-  LIBDEBUG("do_flush(%s)\n", dev->desc);
+  LIBDEBUG("do_flush(%s, %u bits)\n", dev->desc, dev->tdi_data_count);
 
-  for (unsigned int i = 0; i < dev->tdi_data_count; i++) {
-    uint32_t byte_sel = i / 8;
-    uint32_t bit_sel = i % 8;
-
-    uint8_t tdi = (dev->tdi_data[byte_sel] >> bit_sel) & 1;
-
-    mpsse_clock_tms_cs(dev->ctx, dev->tms_data, i, dev->tdo_data, i, 1, tdi,
-                       JTAG_MODE);
-    dev->tdo_data_count++;
-  }
+  otma_clock_run(dev, dev->tdi_data_count);
+  dev->tdo_data_count = dev->tdi_data_count;
 
   int rc = mpsse_flush(dev->ctx);
   sock_debug.debug_write("[MPSSE] %s: mpsse_flush = %d\n", dev->desc, rc);

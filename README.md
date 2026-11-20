@@ -37,7 +37,7 @@ Add your user to `plugdev` group with `sudo adduser $USER plugdev`
 
 The TCK rate is taken from Quartus: the Programmer exposes it as the `JtagClock` hardware parameter (the "Clock frequency" box in the Programmer's Hardware Settings, stored in the Quartus settings under `PGMWQ_TCK_FREQ`) and passes it to the driver in Hz.
 The driver programs the MPSSE divider from that value and reports the rate it actually achieved back to Quartus.
-If the Programmer never sets it, the adapter runs at 2 MHz.
+If the Programmer never sets it, the adapter runs at 30 MHz, the fastest the FT232H's MPSSE can generate and the rate verified on the Storey Peak boards.
 
 The rate can also be set from the command line:
 
@@ -74,6 +74,7 @@ Without `-c` Quartus picks the first cable it finds, which with two identical ad
 - JTAG scan chain and programming of the FPGA works (see the screenshot below)
 - Initialization of the MPSSE is implemented
 - Multiple FT232H adapters are supported, and each one appears as a separate cable
+- Shifts are issued as bulk MPSSE commands, not one command per bit
 - Smaller improvements also pending
 
 ### Download time
@@ -81,13 +82,14 @@ Without `-c` Quartus picks the first cable it finds, which with two identical ad
 The following table present the bitstream download time at different clock
 speeds for 5SGSMD5 with the bitstream size of 213,798,880 bits (cca 26 MB).
 
-| Clock rate [MHz] | Download time [mm:ss] |
-|------------------|-----------------------|
-|  2               | 03:51                 |
-|  4               | 02:50                 |
-|  6               | 02:24                 |
-| 10               | 02:03                 |
-| 20               | 01:54                 |
+| Requested clock [MHz] | Actual TCK [MHz] | Download time [mm:ss] |
+|-----------------------|------------------|-----------------------|
+|  2                    |  2               | 01:56                 |
+|  4                    |  3.75            | 01:08                 |
+|  6                    |  6               | 00:45                 |
+| 10                    | 10               | 00:31                 |
+| 20                    | 15               | 00:24                 |
+| 30                    | 30               | 00:16                 |
 
 
 ### Usage example
