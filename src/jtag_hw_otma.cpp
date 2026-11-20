@@ -53,24 +53,46 @@ SockDebug sock_debug{SOCK_DEBUG_PATH};
 // directions and the TCK divider have to be programmed into the FT232H
 // beforehand.
 
-#define OTMA_DEFAULT_SPEED_KHZ 2000u
 #define OTMA_PIN_OUTPUT_INIT 0xfff8u
 #define OTMA_PIN_DIR_INIT 0xfffbu
 
 #define OTMA_VID 0x0403
 #define OTMA_PID 0x6014
 
-// Override the TCK rate with e.g. OTMA_SPEED_KHZ=10000. The rate has to be
-// programmed before use and then stays in effect for the FT232H, which is why
-// this is read once.
-static unsigned otma_speed_khz(void) {
-  static unsigned khz = 0;
-  if (khz == 0) {
-    const char *env = getenv("OTMA_SPEED_KHZ");
-    int val = env ? atoi(env) : 0;
-    khz = (val > 0) ? (unsigned)val : OTMA_DEFAULT_SPEED_KHZ;
+// TCK rate.
+//
+// Quartus' Programmer configures the cable through the set_param()/get_param()
+// callbacks below. The TCK rate is the "JtagClock" parameter (the "Clock
+// frequency" box in the Programmer's Hardware Settings dialog; Quartus stores
+// it under the PGMWQ_TCK_FREQ key) and arrives here in Hz. The FT232H only
+// needs a divider programmed, so honouring the parameter is a couple of MPSSE
+// commands. Until the Programmer asks for something else we use 2 MHz as a safe
+// default.
+
+#define OTMA_DEFAULT_TCK_HZ 2000000u
+#define OTMA_PARAM_TCK "JtagClock"
+#define OTMA_PARAM_KERNEL_UPDATE "KernelUpdateRequired"
+
+static uint32_t g_tck_hz = OTMA_DEFAULT_TCK_HZ;
+
+// Program the MPSSE clock divider. Returns the rate the FT232H will actually
+// run at, or a negative value on failure.
+static int otma_apply_tck(struct mpsse_ctx *c, uint32_t hz) {
+  if (!c) {
+    return -1;
   }
-  return khz;
+  if (hz == 0) {
+    hz = OTMA_DEFAULT_TCK_HZ;
+  }
+
+  int actual = mpsse_set_frequency(c, (int)hz);
+  int rc = mpsse_flush(c);
+
+  sock_debug.debug_write(
+      "[MPSSE] TCK: requested %u Hz, actual %d Hz, flush = %d\n", hz, actual,
+      rc);
+
+  return (rc == 0) ? actual : -1;
 }
 
 static int otma_init_mpsse(struct mpsse_ctx *c) {
@@ -83,14 +105,8 @@ static int otma_init_mpsse(struct mpsse_ctx *c) {
   mpsse_set_data_bits_high_byte(c, (OTMA_PIN_OUTPUT_INIT >> 8) & 0xff,
                                 (OTMA_PIN_DIR_INIT >> 8) & 0xff);
   mpsse_loopback_config(c, false);
-  int freq = mpsse_set_frequency(c, (int)(otma_speed_khz() * 1000));
-  int rc = mpsse_flush(c);
 
-  sock_debug.debug_write(
-      "[MPSSE] init: requested %u kHz, actual %d Hz, flush = %d\n",
-      otma_speed_khz(), freq, rc);
-
-  return rc;
+  return otma_apply_tck(c, g_tck_hz);
 }
 
 //==============================================================================
@@ -107,7 +123,7 @@ static int otma_init_mpsse(struct mpsse_ctx *c) {
 
 struct otma_dev {
   char desc[32];     // cable description shown by Quartus, e.g. "otma-1:4"
-  char location[32]; // USB bus:port path for mpsse_open(), e.g. "1:4"
+  char location[24]; // USB bus:port path for mpsse_open(), e.g. "1:4"
   struct mpsse_ctx *ctx;
   struct server_ops_t server_ops;
   void *server_ops_data;
@@ -116,6 +132,7 @@ struct otma_dev {
   uint8_t *tdi_data;
   uint32_t tdo_data_count;
   uint32_t tdi_data_count;
+  uint32_t tck_hz; // last rate programmed into this adapter
   bool opened;
 };
 
@@ -283,7 +300,8 @@ int64_t init_dev(void **arg1, const char *desc,
     if (!dev->ctx) {
       return 1;
     }
-    otma_init_mpsse(dev->ctx);
+    int tck = otma_init_mpsse(dev->ctx);
+    dev->tck_hz = (tck > 0) ? (uint32_t)tck : g_tck_hz;
   }
 
   if (!dev->tdo_data) {
@@ -409,13 +427,45 @@ int64_t clock_multiple(void *arg, unsigned jtag_tms, unsigned long *p_bits,
   return 0;
 }
 
-uint64_t set_param(void *arg1, char *arg2, uint32_t arg3) {
-  LIBDEBUG("set_param(param = %s)\n", arg2);
+// Quartus' Programmer asks for the TCK rate before it starts and sets it when
+// the user changes the hardware settings.
+uint64_t set_param(void *arg, char *name, uint32_t value) {
+  otma_dev *dev = otma_dev_from(arg);
+
+  LIBDEBUG("set_param(%s, %s = %u)\n", dev ? dev->desc : "?",
+           name ? name : "?", value);
+
+  if (!name) {
+    return 0;
+  }
+
+  if (!strcmp(name, OTMA_PARAM_TCK)) {
+    g_tck_hz = value ? value : OTMA_DEFAULT_TCK_HZ;
+    if (dev && dev->ctx) {
+      int actual = otma_apply_tck(dev->ctx, g_tck_hz);
+      dev->tck_hz = (actual > 0) ? (uint32_t)actual : g_tck_hz;
+    }
+  }
+
   return 0;
 }
 
-int64_t get_param(void *arg1, char *arg2, uint32_t *arg3) {
-  LIBDEBUG("get_param(param = %s)\n", arg2);
+int64_t get_param(void *arg, char *name, uint32_t *out) {
+  otma_dev *dev = otma_dev_from(arg);
+
+  LIBDEBUG("get_param(%s, %s)\n", dev ? dev->desc : "?",
+           name ? name : "?");
+
+  if (!name || !out) {
+    return 0;
+  }
+
+  if (!strcmp(name, OTMA_PARAM_TCK)) {
+    *out = (dev && dev->tck_hz) ? dev->tck_hz : g_tck_hz;
+  } else if (!strcmp(name, OTMA_PARAM_KERNEL_UPDATE)) {
+    *out = 0; // we drive the FT232H from userspace, no kernel driver involved
+  }
+
   return 0;
 }
 

@@ -35,13 +35,16 @@ Add your user to `plugdev` group with `sudo adduser $USER plugdev`
 
 ## Initialization
 
-The TCK rate defaults to 2 MHz and can be changed with the `OTMA_SPEED_KHZ` environment variable, e.g.
+The TCK rate is taken from Quartus: the Programmer exposes it as the `JtagClock` hardware parameter (the "Clock frequency" box in the Programmer's Hardware Settings, stored in the Quartus settings under `PGMWQ_TCK_FREQ`) and passes it to the driver in Hz.
+The driver programs the MPSSE divider from that value and reports the rate it actually achieved back to Quartus.
+If the Programmer never sets it, the adapter runs at 2 MHz.
+
+The rate can also be set from the command line:
 
 ```sh
-OTMA_SPEED_KHZ=10000 quartus_pgm -c "OTMA FT232H [... bus-instance]" ...
+jtagconfig --setparam "OTMA FT232H [otma-1:4]" JtagClock 6M
+jtagconfig --getparam "OTMA FT232H [otma-1:4]" JtagClock
 ```
-
-Note that the FT232H keeps the programmed clock rate until it is reset, so the rate is taken from the environment of whichever process first opens the adapter.
 
 ## Multiple adapters
 
