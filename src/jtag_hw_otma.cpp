@@ -1,12 +1,17 @@
 
-
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
+
+#include <algorithm>
+#include <mutex>
+
+#include <libusb.h>
 
 #include "jtag_tap_controller.hpp"
 #include "q_defs.h"
@@ -24,7 +29,21 @@ SockDebug sock_debug{SOCK_DEBUG_PATH};
 
 #define JTAG_MODE (LSB_FIRST | POS_EDGE_IN | NEG_EDGE_OUT)
 
-struct mpsse_ctx *ctx = NULL;
+//==============================================================================
+
+#define DEBUG
+
+#ifdef DEBUG
+#define LIBDEBUG(...) sock_debug.debug_write("[lib] " __VA_ARGS__)
+#define LIBDEBUG_HEXDUMP(addr, len) sock_debug.mini_hexdump(addr, len)
+#else
+#define LIBDEBUG(...)                                                          \
+  do {                                                                         \
+  } while (0)
+#define LIBDEBUG_HEXDUMP(...)                                                  \
+  do {                                                                         \
+  } while (0)
+#endif
 
 //==============================================================================
 //
@@ -37,6 +56,9 @@ struct mpsse_ctx *ctx = NULL;
 #define OTMA_DEFAULT_SPEED_KHZ 2000u
 #define OTMA_PIN_OUTPUT_INIT 0xfff8u
 #define OTMA_PIN_DIR_INIT 0xfffbu
+
+#define OTMA_VID 0x0403
+#define OTMA_PID 0x6014
 
 // Override the TCK rate with e.g. OTMA_SPEED_KHZ=10000. The rate has to be
 // programmed before use and then stays in effect for the FT232H, which is why
@@ -72,33 +94,141 @@ static int otma_init_mpsse(struct mpsse_ctx *c) {
 }
 
 //==============================================================================
+//
+// Adapter discovery
+//
+// Every FT232H on the system is a separate JTAG cable. The chips have no
+// serial number (iSerialNumber is 0 in the on-board EEPROM), so the only
+// stable identity is the USB bus/port path, e.g. "1:4" for bus 1 port 4. That
+// is also the string mpsse_open() accepts as its `location` argument.
 
-#define DEBUG
-
-#ifdef DEBUG
-#define LIBDEBUG(...) sock_debug.debug_write("[lib] " __VA_ARGS__)
-#define LIBDEBUG_HEXDUMP(addr, len) sock_debug.mini_hexdump(addr, len)
-#else
-#define LIBDEBUG(...)                                                          \
-  do {                                                                         \
-  } while (0)
-#define LIBDEBUG_HEXDUMP(...)                                                  \
-  do {                                                                         \
-  } while (0)
-#endif
-
-//==============================================================================
-
-struct server_ops_t server_ops;
-void *server_ops_data;
-
+#define OTMA_MAX_DEVS 8
 #define DATA_SIZE_BYTES (32 * 1024 * 1024)
 
-uint8_t *tdo_data = NULL;
-uint8_t *tms_data = NULL;
-uint8_t *tdi_data = NULL;
-uint32_t tdo_data_count = 0;
-uint32_t tdi_data_count = 0;
+struct otma_dev {
+  char desc[32];     // cable description shown by Quartus, e.g. "otma-1:4"
+  char location[32]; // USB bus:port path for mpsse_open(), e.g. "1:4"
+  struct mpsse_ctx *ctx;
+  struct server_ops_t server_ops;
+  void *server_ops_data;
+  uint8_t *tdo_data;
+  uint8_t *tms_data;
+  uint8_t *tdi_data;
+  uint32_t tdo_data_count;
+  uint32_t tdi_data_count;
+  bool opened;
+};
+
+static otma_dev g_devs[OTMA_MAX_DEVS];
+static int g_dev_count = -1; // -1 until enumerated
+static otma_dev *g_last_dev = NULL;
+static std::mutex g_enum_mutex;
+
+static bool otma_build_location(libusb_device *device, char *out,
+                                size_t out_len) {
+  uint8_t path[8];
+  int bus = libusb_get_bus_number(device);
+  int path_len = libusb_get_port_numbers(device, path, sizeof(path));
+
+  if (path_len <= 0 || path_len == LIBUSB_ERROR_OVERFLOW) {
+    return false;
+  }
+
+  int off = snprintf(out, out_len, "%d:", bus);
+  for (int i = 0; i < path_len; i++) {
+    if (off < 0 || (size_t)off >= out_len) {
+      return false;
+    }
+    off += snprintf(out + off, out_len - off, i ? ",%d" : "%d", path[i]);
+  }
+  return true;
+}
+
+// Enumerate the FTDI adapters. Must be called with g_enum_mutex held.
+static void otma_enumerate_locked(void) {
+  if (g_dev_count >= 0) {
+    return;
+  }
+
+  g_dev_count = 0;
+
+  libusb_context *usb_ctx = NULL;
+  if (libusb_init(&usb_ctx) != LIBUSB_SUCCESS) {
+    sock_debug.debug_write("[dev] libusb_init failed\n");
+    return;
+  }
+
+  libusb_device **list = NULL;
+  ssize_t cnt = libusb_get_device_list(usb_ctx, &list);
+  if (cnt < 0) {
+    sock_debug.debug_write("[dev] libusb_get_device_list failed\n");
+    libusb_exit(usb_ctx);
+    return;
+  }
+
+  for (ssize_t i = 0; i < cnt && g_dev_count < OTMA_MAX_DEVS; i++) {
+    struct libusb_device_descriptor desc;
+    if (libusb_get_device_descriptor(list[i], &desc) != LIBUSB_SUCCESS) {
+      continue;
+    }
+    if (desc.idVendor != OTMA_VID || desc.idProduct != OTMA_PID) {
+      continue;
+    }
+
+    otma_dev &dev = g_devs[g_dev_count];
+    memset(&dev, 0, sizeof(dev));
+    if (!otma_build_location(list[i], dev.location, sizeof(dev.location))) {
+      continue;
+    }
+    snprintf(dev.desc, sizeof(dev.desc), "otma-%s", dev.location);
+    g_dev_count++;
+  }
+
+  libusb_free_device_list(list, 1);
+  libusb_exit(usb_ctx);
+
+  std::sort(g_devs, g_devs + g_dev_count,
+            [](const otma_dev &a, const otma_dev &b) {
+              return strcmp(a.location, b.location) < 0;
+            });
+
+  sock_debug.debug_write("[dev] found %d adapter(s)\n", g_dev_count);
+  for (int i = 0; i < g_dev_count; i++) {
+    sock_debug.debug_write("[dev]   %d: %s\n", i, g_devs[i].desc);
+  }
+}
+
+static int otma_enumerate(void) {
+  std::lock_guard<std::mutex> lock(g_enum_mutex);
+  otma_enumerate_locked();
+  return g_dev_count;
+}
+
+static otma_dev *otma_find_by_desc(const char *desc) {
+  int count = otma_enumerate();
+  for (int i = 0; i < count; i++) {
+    if (!strcmp(g_devs[i].desc, desc)) {
+      return &g_devs[i];
+    }
+  }
+  return NULL;
+}
+
+// The Quartus ABI passes the pointer that init_dev() stored through *arg1 back
+// to every transfer callback. Fall back to the most recently opened adapter if
+// it passes something else.
+static otma_dev *otma_dev_from(void *handle) {
+  if (handle) {
+    for (int i = 0; i < g_dev_count; i++) {
+      if (handle == (void *)&g_devs[i]) {
+        return &g_devs[i];
+      }
+    }
+  }
+  return g_last_dev;
+}
+
+//==============================================================================
 
 char find_devs(uint32_t dev_index, char *out_desc, uint32_t api_ver) {
   LIBDEBUG("find_devs(dev_index = %d, api_ver = %d)\n", dev_index, api_ver);
@@ -108,30 +238,24 @@ char find_devs(uint32_t dev_index, char *out_desc, uint32_t api_ver) {
     return 0;
   }
 
-  if (dev_index >= 1) {
+  int count = otma_enumerate();
+  if (dev_index >= (uint32_t)count) {
     LIBDEBUG("  return 0\n");
     return 0;
   }
 
-  const uint16_t vid = 0x0403;
-  const uint16_t pid = 0x6014;
-  if (!ctx) {
-    ctx = mpsse_open(&vid, &pid, NULL, NULL, NULL, 0);
-    sock_debug.debug_write("[MPSSE] mpsse_open = %p\n", ctx);
-    if (ctx) {
-      otma_init_mpsse(ctx);
-    }
-  }
+  // out_desc is a 32 byte field in struct virtual_fns_st
+  strncpy(out_desc, g_devs[dev_index].desc, 31);
+  out_desc[31] = '\0';
 
-  strcpy(out_desc, "bus-instance");
-
+  LIBDEBUG("  desc = %s\n", out_desc);
   LIBDEBUG("  return 1\n");
   return 1;
 }
 
 char find_descriptions(const char *description) {
-  LIBDEBUG("find_descriptions()\n");
-  return !strcmp(description, "bus-instance");
+  LIBDEBUG("find_descriptions(%s)\n", description);
+  return otma_find_by_desc(description) != NULL;
 }
 
 int64_t init_dev(void **arg1, const char *desc,
@@ -144,93 +268,143 @@ int64_t init_dev(void **arg1, const char *desc,
     return 1;
   }
 
-  if (strcmp(desc, "bus-instance") != 0) {
-    LIBDEBUG("  return 1\n");
+  otma_dev *dev = otma_find_by_desc(desc);
+  if (!dev) {
+    sock_debug.debug_write("[dev] unknown adapter '%s'\n", desc);
     return 1;
   }
 
-  memcpy(&server_ops, s_server_ops, sizeof(struct server_ops_t));
-  server_ops_data = parent;
+  if (!dev->ctx) {
+    const uint16_t vid = OTMA_VID;
+    const uint16_t pid = OTMA_PID;
+    dev->ctx = mpsse_open(&vid, &pid, NULL, NULL, dev->location, 0);
+    sock_debug.debug_write("[MPSSE] %s: mpsse_open = %p\n", dev->desc,
+                           dev->ctx);
+    if (!dev->ctx) {
+      return 1;
+    }
+    otma_init_mpsse(dev->ctx);
+  }
+
+  if (!dev->tdo_data) {
+    dev->tdo_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
+    dev->tms_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
+    dev->tdi_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
+    if (!dev->tdo_data || !dev->tms_data || !dev->tdi_data) {
+      sock_debug.debug_write("[dev] %s: buffer allocation failed\n",
+                             dev->desc);
+      return 1;
+    }
+  }
+
+  memcpy(&dev->server_ops, s_server_ops, sizeof(struct server_ops_t));
+  dev->server_ops_data = parent;
+  dev->opened = true;
+  g_last_dev = dev;
+
+  if (arg1) {
+    *arg1 = dev;
+  }
+
+  // A fresh session starts with an empty command queue.
+  dev->tdi_data_count = 0;
+  dev->tdo_data_count = 0;
+  memset(dev->tdi_data, 0, DATA_SIZE_BYTES);
+  memset(dev->tms_data, 0, DATA_SIZE_BYTES);
+  memset(dev->tdo_data, 0, DATA_SIZE_BYTES);
 
   LIBDEBUG("  return 0\n");
   return 1;
 }
 
-void do_close(void *unused_void) { LIBDEBUG("do_close()\n"); }
+void do_close(void *arg) {
+  otma_dev *dev = otma_dev_from(arg);
+  LIBDEBUG("do_close(%s)\n", dev ? dev->desc : "?");
+}
 
-int64_t do_flush(void *unused_void, int bool_val, uint32_t index_val) {
-  LIBDEBUG("do_flush()\n");
+int64_t do_flush(void *arg, int bool_val, uint32_t index_val) {
+  otma_dev *dev = otma_dev_from(arg);
+  if (!dev || !dev->ctx) {
+    return 0;
+  }
 
-  for (unsigned int i = 0; i < tdi_data_count; i++) {
+  LIBDEBUG("do_flush(%s)\n", dev->desc);
+
+  for (unsigned int i = 0; i < dev->tdi_data_count; i++) {
     uint32_t byte_sel = i / 8;
     uint32_t bit_sel = i % 8;
 
-    // uint8_t tms = (tms_data[byte_sel] >> bit_sel) & 1;
-    uint8_t tdi = (tdi_data[byte_sel] >> bit_sel) & 1;
+    uint8_t tdi = (dev->tdi_data[byte_sel] >> bit_sel) & 1;
 
-    int tms_bit = (tms_data[byte_sel] >> bit_sel) & 1;
-    int tdo_bit;
-    mpsse_clock_tms_cs(ctx, tms_data, i, tdo_data, i, 1, tdi, JTAG_MODE);
-    tdo_data_count++;
+    mpsse_clock_tms_cs(dev->ctx, dev->tms_data, i, dev->tdo_data, i, 1, tdi,
+                       JTAG_MODE);
+    dev->tdo_data_count++;
   }
 
-  int rc = mpsse_flush(ctx);
-  sock_debug.debug_write("[MPSSE] mpsse_flush = %d\n", rc);
+  int rc = mpsse_flush(dev->ctx);
+  sock_debug.debug_write("[MPSSE] %s: mpsse_flush = %d\n", dev->desc, rc);
 
-  sock_debug.debug_write("[MPSSE]  tdo_data_count = %d\n", tdo_data_count);
-  // sock_debug.mini_hexdump(tdo_data, (tdo_data_count + 7) / 8);
+  LIBDEBUG("  tdo_data_count = %d\n", dev->tdo_data_count);
 
-  server_ops.p_op_store_tdo(server_ops_data, (uint32_t *)tdo_data,
-                            tdo_data_count);
+  dev->server_ops.p_op_store_tdo(dev->server_ops_data,
+                                 (uint32_t *)dev->tdo_data, dev->tdo_data_count);
 
-  tdi_data_count = 0;
-  tdo_data_count = 0;
-  memset(tdi_data, 0, DATA_SIZE_BYTES);
-  memset(tms_data, 0, DATA_SIZE_BYTES);
-  memset(tdo_data, 0, DATA_SIZE_BYTES);
+  dev->tdi_data_count = 0;
+  dev->tdo_data_count = 0;
+  memset(dev->tdi_data, 0, DATA_SIZE_BYTES);
+  memset(dev->tms_data, 0, DATA_SIZE_BYTES);
+  memset(dev->tdo_data, 0, DATA_SIZE_BYTES);
 
-  server_ops.p_op_indicate_flush(server_ops_data);
+  dev->server_ops.p_op_indicate_flush(dev->server_ops_data);
 
   return 1;
 }
 
-void clock_raw(void *unused_void, uint32_t jtag_tms, uint32_t jtag_tdi,
+void clock_raw(void *arg, uint32_t jtag_tms, uint32_t jtag_tdi,
                unsigned long len) {
+  otma_dev *dev = otma_dev_from(arg);
+  if (!dev) {
+    return;
+  }
 
-  LIBDEBUG("clock_raw(tms = %d, tdi = %d, len = %d)\n", jtag_tms, jtag_tdi,
-           len);
+  LIBDEBUG("clock_raw(%s, tms = %d, tdi = %d, len = %d)\n", dev->desc, jtag_tms,
+           jtag_tdi, len);
 
   for (unsigned int i = 0; i < len; i++) {
-    uint32_t byte_sel = tdi_data_count / 8;
-    uint32_t bit_sel = tdi_data_count % 8;
+    uint32_t byte_sel = dev->tdi_data_count / 8;
+    uint32_t bit_sel = dev->tdi_data_count % 8;
 
-    tdi_data[byte_sel] |= (jtag_tdi << bit_sel);
-    tms_data[byte_sel] |= (jtag_tms << bit_sel);
+    dev->tdi_data[byte_sel] |= (jtag_tdi << bit_sel);
+    dev->tms_data[byte_sel] |= (jtag_tms << bit_sel);
 
-    tdi_data_count += 1;
+    dev->tdi_data_count += 1;
   }
 }
 
-int64_t clock_multiple(void *unused_void, unsigned jtag_tms,
-                       unsigned long *p_bits, unsigned long len,
+int64_t clock_multiple(void *arg, unsigned jtag_tms, unsigned long *p_bits,
+                       unsigned long len,
                        unsigned long field_144_minus_len) {
-  LIBDEBUG("clock_multiple(tmp = %d, bits = %p, len = %d, ? = %d)\n", jtag_tms,
-           p_bits, len, field_144_minus_len);
-  // LIBDEBUG_HEXDUMP(p_bits, (len + 7) / 8 + 1);
+  otma_dev *dev = otma_dev_from(arg);
+  if (!dev) {
+    return 0;
+  }
+
+  LIBDEBUG("clock_multiple(%s, tms = %d, bits = %p, len = %d, ? = %d)\n",
+           dev->desc, jtag_tms, p_bits, len, field_144_minus_len);
 
   uint8_t *in_ptr = (uint8_t *)(p_bits);
   for (unsigned int i = 0; i < len; i++) {
     uint32_t in_byte_sel = i / 8;
     uint32_t in_bit_sel = i % 8;
-    uint32_t byte_sel = tdi_data_count / 8;
-    uint32_t bit_sel = tdi_data_count % 8;
+    uint32_t byte_sel = dev->tdi_data_count / 8;
+    uint32_t bit_sel = dev->tdi_data_count % 8;
 
     uint8_t in_bit = (in_ptr[in_byte_sel] >> in_bit_sel) & 0x1;
 
-    tdi_data[byte_sel] |= (in_bit << bit_sel);
-    tms_data[byte_sel] |= (jtag_tms << bit_sel);
+    dev->tdi_data[byte_sel] |= (in_bit << bit_sel);
+    dev->tms_data[byte_sel] |= (jtag_tms << bit_sel);
 
-    tdi_data_count += 1;
+    dev->tdi_data_count += 1;
   }
   return 0;
 }
@@ -279,20 +453,7 @@ get_supported_hardware(uint32_t hw_type) {
     return 0;
   }
 
-  if (!tdo_data) {
-    tdo_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
-  }
-  if (!tms_data) {
-    tms_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
-  }
-  if (!tdi_data) {
-    tdi_data = (uint8_t *)malloc(DATA_SIZE_BYTES);
-  }
-
-  LIBDEBUG("  tdo_data = %p\n", tdo_data);
-  LIBDEBUG("  tms_data = %p\n", tms_data);
-  LIBDEBUG("  tdi_data = %p\n", tdi_data);
-
+  // Per-adapter buffers are allocated when the adapter is opened.
   return &fns;
 }
 }

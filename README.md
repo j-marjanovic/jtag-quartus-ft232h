@@ -43,10 +43,34 @@ OTMA_SPEED_KHZ=10000 quartus_pgm -c "OTMA FT232H [... bus-instance]" ...
 
 Note that the FT232H keeps the programmed clock rate until it is reset, so the rate is taken from the environment of whichever process first opens the adapter.
 
+## Multiple adapters
+
+Every FT232H found on the system is presented as a separate JTAG cable, so several boards can be connected at the same time:
+
+```
+$ jtagconfig
+1) OTMA FT232H [otma-1:4]
+  029070DD   5SGSMD5(B|K|H|E|D)...
+2) OTMA FT232H [otma-1:5]
+  029070DD   5SGSMD5(B|K|H|E|D)...
+```
+
+The part in brackets is the USB bus and port path of the adapter (`bus:port`).
+The on-board EEPROMs carry no serial number, so this is the only stable identity--keep the cables in the same USB ports if you rely on the names.
+
+Select a cable by name, e.g. for `quartus_pgm`:
+
+```sh
+quartus_pgm -c "OTMA FT232H [otma-1:4]" -m jtag -o "p;top.sof"
+```
+
+Without `-c` Quartus picks the first cable it finds, which with two identical adapters is not necessarily the one you want.
+
 ## Current state
 
 - JTAG scan chain and programming of the FPGA works (see the screenshot below)
 - Initialization of the MPSSE is implemented
+- Multiple FT232H adapters are supported, and each one appears as a separate cable
 - Smaller improvements also pending
 
 ### Download time
