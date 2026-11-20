@@ -35,23 +35,18 @@ Add your user to `plugdev` group with `sudo adduser $USER plugdev`
 
 ## Initialization
 
-Before using this driver, run OpenOCD to initialize the FT232H:
+The TCK rate defaults to 2 MHz and can be changed with the `OTMA_SPEED_KHZ` environment variable, e.g.
 
 ```sh
-openocd \
-    -f interface/ftdi/um232h.cfg \
-    -c "adapter speed 2000; transport select jtag; jtag newtap auto0 tap -irlen 10 -expected-id 0x029070dd; init; exit;"
+OTMA_SPEED_KHZ=10000 quartus_pgm -c "OTMA FT232H [... bus-instance]" ...
 ```
 
-To initialize the interface at different clock speeds, change the `adapter_khz` parameter.
-
-
-OpenOCD prebuilt binaries can be downloaded from <https://github.com/xpack-dev-tools/openocd-xpack/releases>.
+Note that the FT232H keeps the programmed clock rate until it is reset, so the rate is taken from the environment of whichever process first opens the adapter.
 
 ## Current state
 
 - JTAG scan chain and programming of the FPGA works (see the screenshot below)
-- Initialization of the MPSSE is not implemented --> run OpenOCD once to init the device
+- Initialization of the MPSSE is implemented
 - Smaller improvements also pending
 
 ### Download time

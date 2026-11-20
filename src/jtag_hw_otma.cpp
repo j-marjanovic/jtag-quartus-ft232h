@@ -27,6 +27,51 @@ SockDebug sock_debug{SOCK_DEBUG_PATH};
 struct mpsse_ctx *ctx = NULL;
 
 //==============================================================================
+//
+// MPSSE initialisation
+//
+// Quartus' jtagd only opens the MPSSE and starts clocking, so the pin
+// directions and the TCK divider have to be programmed into the FT232H
+// beforehand.
+
+#define OTMA_DEFAULT_SPEED_KHZ 2000u
+#define OTMA_PIN_OUTPUT_INIT 0xfff8u
+#define OTMA_PIN_DIR_INIT 0xfffbu
+
+// Override the TCK rate with e.g. OTMA_SPEED_KHZ=10000. The rate has to be
+// programmed before use and then stays in effect for the FT232H, which is why
+// this is read once.
+static unsigned otma_speed_khz(void) {
+  static unsigned khz = 0;
+  if (khz == 0) {
+    const char *env = getenv("OTMA_SPEED_KHZ");
+    int val = env ? atoi(env) : 0;
+    khz = (val > 0) ? (unsigned)val : OTMA_DEFAULT_SPEED_KHZ;
+  }
+  return khz;
+}
+
+static int otma_init_mpsse(struct mpsse_ctx *c) {
+  if (!c) {
+    return -1;
+  }
+
+  mpsse_set_data_bits_low_byte(c, OTMA_PIN_OUTPUT_INIT & 0xff,
+                               OTMA_PIN_DIR_INIT & 0xff);
+  mpsse_set_data_bits_high_byte(c, (OTMA_PIN_OUTPUT_INIT >> 8) & 0xff,
+                                (OTMA_PIN_DIR_INIT >> 8) & 0xff);
+  mpsse_loopback_config(c, false);
+  int freq = mpsse_set_frequency(c, (int)(otma_speed_khz() * 1000));
+  int rc = mpsse_flush(c);
+
+  sock_debug.debug_write(
+      "[MPSSE] init: requested %u kHz, actual %d Hz, flush = %d\n",
+      otma_speed_khz(), freq, rc);
+
+  return rc;
+}
+
+//==============================================================================
 
 #define DEBUG
 
@@ -72,8 +117,11 @@ char find_devs(uint32_t dev_index, char *out_desc, uint32_t api_ver) {
   const uint16_t pid = 0x6014;
   if (!ctx) {
     ctx = mpsse_open(&vid, &pid, NULL, NULL, NULL, 0);
+    sock_debug.debug_write("[MPSSE] mpsse_open = %p\n", ctx);
+    if (ctx) {
+      otma_init_mpsse(ctx);
+    }
   }
-  sock_debug.debug_write("[MPSSE] mpsse_open = %p\n", ctx);
 
   strcpy(out_desc, "bus-instance");
 
