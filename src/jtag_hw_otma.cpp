@@ -122,8 +122,10 @@ static int otma_init_mpsse(struct mpsse_ctx *c) {
 #define DATA_SIZE_BYTES (32 * 1024 * 1024)
 
 struct otma_dev {
-  char desc[32];     // cable description shown by Quartus, e.g. "otma-1:4"
-  char location[24]; // USB bus:port path for mpsse_open(), e.g. "1:4"
+  char desc[32];       // cable description shown by Quartus, e.g. "otma-1:4"
+  char location[24];   // USB bus:port path for mpsse_open(), e.g. "1:4"
+  uint8_t usb_address; // changes when the adapter is re-enumerated
+  bool present;        // slot holds a currently connected adapter
   struct mpsse_ctx *ctx;
   struct server_ops_t server_ops;
   void *server_ops_data;
@@ -136,8 +138,11 @@ struct otma_dev {
   bool opened;
 };
 
+// Slots are never moved between refreshes: Quartus keeps the pointer that
+// init_dev() returned, so g_devs[i] must stay valid for the life of a session.
 static otma_dev g_devs[OTMA_MAX_DEVS];
-static int g_dev_count = -1; // -1 until enumerated
+static int g_active[OTMA_MAX_DEVS]; // g_devs indices, sorted by location
+static int g_active_count = 0;
 static otma_dev *g_last_dev = NULL;
 static std::mutex g_enum_mutex;
 
@@ -161,18 +166,17 @@ static bool otma_build_location(libusb_device *device, char *out,
   return true;
 }
 
-// Enumerate the FTDI adapters. Must be called with g_enum_mutex held.
-static void otma_enumerate_locked(void) {
-  if (g_dev_count >= 0) {
-    return;
-  }
+struct otma_usb_info {
+  char location[24];
+  uint8_t address;
+};
 
-  g_dev_count = 0;
-
+// Scan the bus for FT232H adapters. Must be called with g_enum_mutex held.
+static int otma_scan_usb(struct otma_usb_info *out, int max) {
   libusb_context *usb_ctx = NULL;
   if (libusb_init(&usb_ctx) != LIBUSB_SUCCESS) {
     sock_debug.debug_write("[dev] libusb_init failed\n");
-    return;
+    return 0;
   }
 
   libusb_device **list = NULL;
@@ -180,10 +184,11 @@ static void otma_enumerate_locked(void) {
   if (cnt < 0) {
     sock_debug.debug_write("[dev] libusb_get_device_list failed\n");
     libusb_exit(usb_ctx);
-    return;
+    return 0;
   }
 
-  for (ssize_t i = 0; i < cnt && g_dev_count < OTMA_MAX_DEVS; i++) {
+  int n = 0;
+  for (ssize_t i = 0; i < cnt && n < max; i++) {
     struct libusb_device_descriptor desc;
     if (libusb_get_device_descriptor(list[i], &desc) != LIBUSB_SUCCESS) {
       continue;
@@ -191,41 +196,141 @@ static void otma_enumerate_locked(void) {
     if (desc.idVendor != OTMA_VID || desc.idProduct != OTMA_PID) {
       continue;
     }
-
-    otma_dev &dev = g_devs[g_dev_count];
-    memset(&dev, 0, sizeof(dev));
-    if (!otma_build_location(list[i], dev.location, sizeof(dev.location))) {
+    if (!otma_build_location(list[i], out[n].location,
+                             sizeof(out[n].location))) {
       continue;
     }
-    snprintf(dev.desc, sizeof(dev.desc), "otma-%s", dev.location);
-    g_dev_count++;
+    out[n].address = libusb_get_device_address(list[i]);
+    n++;
   }
 
   libusb_free_device_list(list, 1);
   libusb_exit(usb_ctx);
+  return n;
+}
 
-  std::sort(g_devs, g_devs + g_dev_count,
-            [](const otma_dev &a, const otma_dev &b) {
-              return strcmp(a.location, b.location) < 0;
-            });
+static void otma_free_dev(otma_dev *dev) {
+  if (dev->ctx) {
+    mpsse_close(dev->ctx);
+    dev->ctx = nullptr;
+  }
+  free(dev->tdo_data);
+  free(dev->tms_data);
+  free(dev->tdi_data);
+  dev->tdo_data = nullptr;
+  dev->tms_data = nullptr;
+  dev->tdi_data = nullptr;
+  dev->opened = false;
+  dev->present = false;
+  if (g_last_dev == dev) {
+    g_last_dev = nullptr;
+  }
+}
 
-  sock_debug.debug_write("[dev] found %d adapter(s)\n", g_dev_count);
-  for (int i = 0; i < g_dev_count; i++) {
-    sock_debug.debug_write("[dev]   %d: %s\n", i, g_devs[i].desc);
+// Refresh the adapter list. Existing slots are matched by USB location and
+// device address, so an adapter that was re-plugged (and therefore got a new
+// USB address and had ftdi_sio bound to it) is released and re-opened instead
+// of keeping a stale handle. Must be called with g_enum_mutex held.
+static void otma_refresh_locked(void) {
+  struct otma_usb_info found[OTMA_MAX_DEVS];
+  int found_count = otma_scan_usb(found, OTMA_MAX_DEVS);
+  bool matched[OTMA_MAX_DEVS] = {false};
+
+  for (int i = 0; i < found_count; i++) {
+    int slot = -1;
+    bool existing = false;
+
+    for (int j = 0; j < OTMA_MAX_DEVS; j++) {
+      if (g_devs[j].present && !matched[j] &&
+          !strcmp(g_devs[j].location, found[i].location) &&
+          g_devs[j].usb_address == found[i].address) {
+        slot = j;
+        existing = true;
+        matched[j] = true;
+        break;
+      }
+    }
+
+    if (slot < 0) {
+      // An adapter on this port has a new USB address: it was re-plugged.
+      for (int j = 0; j < OTMA_MAX_DEVS; j++) {
+        if (!g_devs[j].present || matched[j]) {
+          continue;
+        }
+        if (!strcmp(g_devs[j].location, found[i].location)) {
+          otma_free_dev(&g_devs[j]);
+          matched[j] = true;
+          slot = j;
+          break;
+        }
+      }
+    }
+
+    if (slot < 0) {
+      for (int j = 0; j < OTMA_MAX_DEVS; j++) {
+        if (!g_devs[j].present) {
+          slot = j;
+          break;
+        }
+      }
+    }
+
+    if (slot < 0) {
+      sock_debug.debug_write("[dev] too many adapters, ignoring %s\n",
+                             found[i].location);
+      continue;
+    }
+
+    // Only initialise a slot that is new or was just released. A slot that
+    // matched an existing adapter keeps its mpsse context and server_ops: it
+    // may be open, and reinitialising it would drop the handle mid-session
+    // (this is what made System Console lose the second device's master).
+    if (!existing) {
+      memset(&g_devs[slot], 0, sizeof(g_devs[slot]));
+    }
+    snprintf(g_devs[slot].location, sizeof(g_devs[slot].location), "%s",
+             found[i].location);
+    snprintf(g_devs[slot].desc, sizeof(g_devs[slot].desc), "otma-%s",
+             found[i].location);
+    g_devs[slot].usb_address = found[i].address;
+    g_devs[slot].present = true;
+    matched[slot] = true;
+  }
+
+  for (int j = 0; j < OTMA_MAX_DEVS; j++) {
+    if (g_devs[j].present && !matched[j]) {
+      otma_free_dev(&g_devs[j]);
+    }
+  }
+
+  g_active_count = 0;
+  for (int j = 0; j < OTMA_MAX_DEVS; j++) {
+    if (g_devs[j].present) {
+      g_active[g_active_count++] = j;
+    }
+  }
+  std::sort(g_active, g_active + g_active_count, [](int a, int b) {
+    return strcmp(g_devs[a].location, g_devs[b].location) < 0;
+  });
+
+  sock_debug.debug_write("[dev] found %d adapter(s)\n", g_active_count);
+  for (int i = 0; i < g_active_count; i++) {
+    sock_debug.debug_write("[dev]   %d: %s\n", i, g_devs[g_active[i]].desc);
   }
 }
 
 static int otma_enumerate(void) {
   std::lock_guard<std::mutex> lock(g_enum_mutex);
-  otma_enumerate_locked();
-  return g_dev_count;
+  otma_refresh_locked();
+  return g_active_count;
 }
 
 static otma_dev *otma_find_by_desc(const char *desc) {
   int count = otma_enumerate();
   for (int i = 0; i < count; i++) {
-    if (!strcmp(g_devs[i].desc, desc)) {
-      return &g_devs[i];
+    otma_dev &dev = g_devs[g_active[i]];
+    if (!strcmp(dev.desc, desc)) {
+      return &dev;
     }
   }
   return NULL;
@@ -236,8 +341,8 @@ static otma_dev *otma_find_by_desc(const char *desc) {
 // it passes something else.
 static otma_dev *otma_dev_from(void *handle) {
   if (handle) {
-    for (int i = 0; i < g_dev_count; i++) {
-      if (handle == (void *)&g_devs[i]) {
+    for (int i = 0; i < OTMA_MAX_DEVS; i++) {
+      if (handle == (void *)&g_devs[i] && g_devs[i].present) {
         return &g_devs[i];
       }
     }
@@ -262,7 +367,8 @@ char find_devs(uint32_t dev_index, char *out_desc, uint32_t api_ver) {
   }
 
   // out_desc is a 32 byte field in struct virtual_fns_st
-  strncpy(out_desc, g_devs[dev_index].desc, 31);
+  otma_dev &dev = g_devs[g_active[dev_index]];
+  strncpy(out_desc, dev.desc, 31);
   out_desc[31] = '\0';
 
   LIBDEBUG("  desc = %s\n", out_desc);
