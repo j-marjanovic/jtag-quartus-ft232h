@@ -338,6 +338,22 @@ int64_t init_dev(void **arg1, const char *desc,
 void do_close(void *arg) {
   otma_dev *dev = otma_dev_from(arg);
   LIBDEBUG("do_close(%s)\n", dev ? dev->desc : "?");
+
+  if (!dev) {
+    return;
+  }
+
+  // Release the USB handle so the next init_dev() re-opens and re-claims the
+  // adapter. Keeping it open across sessions means that if the adapter is
+  // unplugged and plugged back in while jtagd is running, the stale handle
+  // silently survives: mpsse_open() is never called again, so ftdi_sio (which
+  // the kernel binds on re-enumeration) is never detached and the next
+  // transfer fails.
+  if (dev->ctx) {
+    mpsse_close(dev->ctx);
+    dev->ctx = nullptr;
+  }
+  dev->opened = false;
 }
 
 //==============================================================================
