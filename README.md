@@ -17,7 +17,7 @@ Build:
 git clone https://github.com/j-marjanovic/jtag-quartus-ft232h
 cd jtag-quartus-ft232h
 mkdir build && cd build
-cmake ..
+cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j`nproc`
 ```
 
@@ -84,12 +84,12 @@ speeds for 5SGSMD5 with the bitstream size of 213,798,880 bits (cca 26 MB).
 
 | Requested clock [MHz] | Actual TCK [MHz] | Download time [mm:ss] |
 |-----------------------|------------------|-----------------------|
-|  2                    |  2               | 01:56                 |
-|  4                    |  3.75            | 01:08                 |
-|  6                    |  6               | 00:45                 |
-| 10                    | 10               | 00:31                 |
-| 20                    | 15               | 00:24                 |
-| 30                    | 30               | 00:16                 |
+|  2                    |  2               | 01:55                 |
+|  4                    |  3.75            | 01:05                 |
+|  6                    |  6               | 00:44                 |
+| 10                    | 10               | 00:30                 |
+| 20                    | 15               | 00:23                 |
+| 30                    | 30               | 00:15                 |
 
 
 ### Usage example
