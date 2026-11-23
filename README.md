@@ -17,7 +17,7 @@ Build:
 git clone https://github.com/j-marjanovic/jtag-quartus-ft232h
 cd jtag-quartus-ft232h
 mkdir build && cd build
-cmake ..
+cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j`nproc`
 ```
 
@@ -35,23 +35,46 @@ Add your user to `plugdev` group with `sudo adduser $USER plugdev`
 
 ## Initialization
 
-Before using this driver, run OpenOCD to initialize the FT232H:
+The TCK rate is taken from Quartus: the Programmer exposes it as the `JtagClock` hardware parameter (the "Clock frequency" box in the Programmer's Hardware Settings, stored in the Quartus settings under `PGMWQ_TCK_FREQ`) and passes it to the driver in Hz.
+The driver programs the MPSSE divider from that value and reports the rate it actually achieved back to Quartus.
+If the Programmer never sets it, the adapter runs at 30 MHz, the fastest the FT232H's MPSSE can generate and the rate verified on the Storey Peak boards.
+
+The rate can also be set from the command line:
 
 ```sh
-openocd \
-    -f interface/ftdi/um232h.cfg \
-    -c "adapter speed 2000; transport select jtag; jtag newtap auto0 tap -irlen 10 -expected-id 0x029070dd; init; exit;"
+jtagconfig --setparam "OTMA FT232H [otma-1:4]" JtagClock 6M
+jtagconfig --getparam "OTMA FT232H [otma-1:4]" JtagClock
 ```
 
-To initialize the interface at different clock speeds, change the `adapter_khz` parameter.
+## Multiple adapters
 
+Every FT232H found on the system is presented as a separate JTAG cable, so several boards can be connected at the same time:
 
-OpenOCD prebuilt binaries can be downloaded from <https://github.com/xpack-dev-tools/openocd-xpack/releases>.
+```
+$ jtagconfig
+1) OTMA FT232H [otma-1:4]
+  029070DD   5SGSMD5(B|K|H|E|D)...
+2) OTMA FT232H [otma-1:5]
+  029070DD   5SGSMD5(B|K|H|E|D)...
+```
+
+The part in brackets is the USB bus and port path of the adapter (`bus:port`).
+The on-board EEPROMs carry no serial number, so this is the only stable identity--keep the cables in the same USB ports if you rely on the names.
+
+Select a cable by name, e.g. for `quartus_pgm`:
+
+```sh
+quartus_pgm -c "OTMA FT232H [otma-1:4]" -m jtag -o "p;top.sof"
+```
+
+Without `-c` Quartus picks the first cable it finds, which with two identical adapters is not necessarily the one you want.
 
 ## Current state
 
 - JTAG scan chain and programming of the FPGA works (see the screenshot below)
-- Initialization of the MPSSE is not implemented --> run OpenOCD once to init the device
+- Initialization of the MPSSE is implemented
+- Multiple FT232H adapters are supported, and each one appears as a separate cable
+- Shifts are issued as bulk MPSSE commands, not one command per bit
 - Smaller improvements also pending
 
 ### Download time
@@ -59,13 +82,14 @@ OpenOCD prebuilt binaries can be downloaded from <https://github.com/xpack-dev-t
 The following table present the bitstream download time at different clock
 speeds for 5SGSMD5 with the bitstream size of 213,798,880 bits (cca 26 MB).
 
-| Clock rate [MHz] | Download time [mm:ss] |
-|------------------|-----------------------|
-|  2               | 03:51                 |
-|  4               | 02:50                 |
-|  6               | 02:24                 |
-| 10               | 02:03                 |
-| 20               | 01:54                 |
+| Requested clock [MHz] | Actual TCK [MHz] | Download time [mm:ss] |
+|-----------------------|------------------|-----------------------|
+|  2                    |  2               | 01:55                 |
+|  4                    |  3.75            | 01:05                 |
+|  6                    |  6               | 00:44                 |
+| 10                    | 10               | 00:30                 |
+| 20                    | 15               | 00:23                 |
+| 30                    | 30               | 00:15                 |
 
 
 ### Usage example
